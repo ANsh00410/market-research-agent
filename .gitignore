@@ -1,0 +1,22 @@
+# Secrets and environment variables
+.env
+
+# Python cache and virtual environments
+__pycache__/
+*.py[cod]
+*$py.class
+venv/
+env/
+.venv/
+
+# Generated application data
+portfolio.json
+
+# Generated reports and exports
+india_market_*.md
+report_*.md
+portfolio_*.csv
+
+# OS specific files
+.DS_Store
+Thumbs.db

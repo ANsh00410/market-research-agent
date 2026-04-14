@@ -1,0 +1,12 @@
+groq
+duckduckgo-search
+newsapi-python
+yfinance
+textblob
+pandas
+streamlit
+plotly
+python-dotenv
+numpy
+pdfplumber
+pandas-ta
