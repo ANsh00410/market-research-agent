@@ -10,3 +10,7 @@ python-dotenv
 numpy
 pdfplumber
 pandas-ta
+feedparser
+streamlit-autorefresh
+beautifulsoup4
+requests
