@@ -7,6 +7,15 @@ from duckduckgo_search import DDGS
 from datetime import datetime, timedelta
 
 
+def get_session():
+    import requests
+    session = requests.Session()
+    session.headers.update({
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
+    })
+    return session
+
+
 def get_stock_analysis(company_name: str, ticker: str = None) -> str:
     """
     Fetch stock data and technical analysis for Indian stocks.
@@ -14,13 +23,14 @@ def get_stock_analysis(company_name: str, ticker: str = None) -> str:
     Ticker format for BSE: 'RELIANCE.BO'
     """
     try:
+        session = get_session()
         # If no ticker provided, try to guess it
         if not ticker:
             # Common Indian stock mapping
             nse_ticker = company_name.upper().replace(" ", "") + ".NS"
-            stock = yf.Ticker(nse_ticker)
+            stock = yf.Ticker(nse_ticker, session=session)
         else:
-            stock = yf.Ticker(ticker)
+            stock = yf.Ticker(ticker, session=session)
 
         # Get 2 years of historical data to allow 200 DMA and 52W high/low calculations
         df = stock.history(period="2y")
@@ -153,7 +163,8 @@ def get_stock_sentiment(company_name: str, ticker: str = None) -> str:
     """Analyze news sentiment for a company's stock."""
     try:
         if ticker:
-            stock = yf.Ticker(ticker)
+            session = get_session()
+            stock = yf.Ticker(ticker, session=session)
             news_results = stock.news
         else:
             with DDGS() as ddgs:

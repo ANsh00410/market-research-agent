@@ -509,11 +509,147 @@ def save_portfolio(p):
     with open(PORTFOLIO_FILE, "w") as f:
         json.dump(p, f, indent=2)
 
+def get_session():
+    import requests
+    session = requests.Session()
+    session.headers.update({
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
+    })
+    return session
+
+
+@st.cache_data(ttl=60, show_spinner=False)
+def fetch_portfolio_snapshots_cached(portfolio_entries_json):
+    portfolio_entries = json.loads(portfolio_entries_json)
+    snapshots = {}
+    tickers = list(set([entry.get("ticker", "UNKNOWN") for entry in portfolio_entries if entry.get("ticker")]))
+    if not tickers:
+        return {}
+
+    session = get_session()
+    raw_data = None
+    err_msg = "Unknown error"
+    
+    # Download in one single batch HTTP request (drastically reduces 429 risk)
+    try:
+        raw_data = yf.download(
+            tickers,
+            period="5y",
+            group_by="ticker",
+            progress=False,
+            threads=True,
+            session=session
+        )
+    except Exception as e:
+        err_msg = str(e)
+
+    for entry in portfolio_entries:
+        eid = entry.get("id", entry.get("ticker", "UNKNOWN"))
+        ticker = entry.get("ticker", "UNKNOWN")
+        company = entry.get("company", "Unknown")
+        try:
+            if raw_data is None or raw_data.empty:
+                raise ValueError(f"Failed to fetch data from Yahoo Finance: {err_msg}")
+
+            # Extract this ticker's df
+            if len(tickers) == 1:
+                df_t = raw_data
+            else:
+                if hasattr(raw_data.columns, 'levels') and ticker in raw_data.columns.levels[0]:
+                    df_t = raw_data[ticker]
+                elif hasattr(raw_data.columns, 'levels') and ticker in raw_data.columns.get_level_values(0):
+                    df_t = raw_data[ticker]
+                else:
+                    raise ValueError(f"No data found for {ticker}")
+
+            if df_t is None or df_t.empty:
+                raise ValueError(f"No data found for {ticker}")
+
+            df_t = df_t.dropna(subset=["Close"])
+            if len(df_t) < 2:
+                raise ValueError(f"Insufficient data for {ticker}")
+
+            hist_close = float(df_t["Close"].iloc[-1])
+            prev_close = float(df_t["Close"].iloc[-2])
+
+            if np.isnan(hist_close) or np.isnan(prev_close) or hist_close <= 0:
+                raise ValueError(f"Invalid price data for {ticker}")
+
+            # Try to get live price via fast_info fallback or yf.Ticker
+            cur = hist_close
+            prev = prev_close
+            try:
+                stock_obj = yf.Ticker(ticker, session=session)
+                fi = stock_obj.fast_info
+                live_price = float(fi.last_price)
+                prev_close_ = float(fi.previous_close) if fi.previous_close else prev_close
+                if not np.isnan(live_price) and live_price > 0:
+                    cur = live_price
+                    prev = prev_close_ if (prev_close_ and not np.isnan(prev_close_)) else prev_close
+            except Exception:
+                pass
+
+            chg = (cur - prev) / prev * 100 if prev else 0
+
+            # Technical indicators
+            ma20 = float(df_t["Close"].rolling(20).mean().iloc[-1]) if len(df_t) >= 20 else None
+            ma50 = float(df_t["Close"].rolling(50).mean().iloc[-1]) if len(df_t) >= 50 else None
+            if ma20 and np.isnan(ma20): ma20 = None
+            if ma50 and np.isnan(ma50): ma50 = None
+
+            rsi = None
+            if len(df_t) >= 15:
+                d = df_t["Close"].diff()
+                g = d.clip(lower=0).rolling(14).mean()
+                l = (-d.clip(upper=0)).rolling(14).mean()
+                r = g / l.replace(0, float("nan"))
+                v = (100 - 100 / (1 + r)).iloc[-1]
+                rsi = float(v) if not np.isnan(v) else None
+
+            bull, bear = 0, 0
+            if ma20:
+                bull += 1 if cur > ma20 else 0
+                bear += 1 if cur < ma20 else 0
+            if ma50:
+                bull += 1 if cur > ma50 else 0
+                bear += 1 if cur < ma50 else 0
+            if rsi:
+                if rsi < 35: bull += 1
+                if rsi > 65: bear += 1
+            signal = "BULLISH" if bull > bear + 1 else ("BEARISH" if bear > bull + 1 else "NEUTRAL")
+
+            vol_series = df_t["Volume"].replace(0, np.nan).dropna()
+            avg_vol = int(vol_series.rolling(min(20, len(vol_series))).mean().iloc[-1]) if len(vol_series) >= 2 else 0
+            today_vol = int(df_t["Volume"].iloc[-1]) if not np.isnan(df_t["Volume"].iloc[-1]) else 0
+
+            snapshots[eid] = {
+                "ticker": ticker,
+                "company": company,
+                "current_price": round(cur, 2),
+                "prev_close": round(prev, 2),
+                "today_change": round(chg, 2),
+                "week52_high": round(float(df_t["High"].tail(252).max()), 2),
+                "week52_low": round(float(df_t["Low"].tail(252).min()), 2),
+                "ma20": round(ma20, 2) if ma20 else None,
+                "ma50": round(ma50, 2) if ma50 else None,
+                "rsi": round(rsi, 2) if rsi else None,
+                "signal": signal,
+                "avg_volume": avg_vol,
+                "today_volume": today_vol,
+                "return_1m": _pret(df_t, 21),
+                "df": df_t,
+            }
+        except Exception as e:
+            snapshots[eid] = {"error": str(e), "ticker": ticker, "company": company}
+
+    return snapshots
+
 
 @st.cache_data(ttl=60, show_spinner=False)
 def _fetch_stock_snapshot_cached(company, ticker):
     time.sleep(0.5)  # Add small delay to prevent batch rate-limiting
-    stock = yf.Ticker(ticker)
+    session = get_session()
+    stock = yf.Ticker(ticker, session=session)
 
     # ── Historical data for indicators (5 Years) ──────────────────
     df = stock.history(period="5y")
@@ -622,7 +758,8 @@ def _fetch_stock_snapshot_cached(company, ticker):
 def fetch_hourly_data_cached(ticker):
     try:
         time.sleep(0.5)
-        stock = yf.Ticker(ticker)
+        session = get_session()
+        stock = yf.Ticker(ticker, session=session)
         df = stock.history(period="1mo", interval="1h")
         if not df.empty:
             df = df.dropna(subset=["Close"])
@@ -1370,13 +1507,10 @@ with tab2:
             entry["added_on"] = "2026-01-01"
     save_portfolio(st.session_state.portfolio)  # persist migrated data
 
-    # ── Fetch live prices ─────────────────────────────────────────────────
-    with st.spinner("Fetching live prices from NSE/BSE..."):
-        stock_data = {}
-        for entry in st.session_state.portfolio:
-            stock_data[entry["id"]] = fetch_stock_snapshot(
-                entry.get("company", "Unknown"), entry.get("ticker", "UNKNOWN")
-            )
+    # ── Fetch live prices in BATCH ────────────────────────────────────────
+    with st.spinner("Fetching live prices from NSE/BSE (Batch)..."):
+        portfolio_json = json.dumps(st.session_state.portfolio)
+        stock_data = fetch_portfolio_snapshots_cached(portfolio_json)
 
     # ── Summary metrics ───────────────────────────────────────────────────
     tot_inv = tot_cur = 0
@@ -1648,14 +1782,10 @@ with tab3:
     board_refresh = bc1.button("🔄 Refresh", key="board_refresh")
     board_pred_all = bc2.button("🤖 Predict All", key="board_pred_all")
 
-    # ── Fetch data ────────────────────────────────────────────────────────
-    with st.spinner("Fetching live prices..."):
-        board_data = {}
-        for entry in st.session_state.portfolio:
-            eid = entry.get("id", entry.get("ticker", "?"))
-            board_data[eid] = fetch_stock_snapshot(
-                entry.get("company", "Unknown"), entry.get("ticker", "UNKNOWN")
-            )
+    # ── Fetch data in BATCH ───────────────────────────────────────────────
+    with st.spinner("Fetching live prices (Batch)..."):
+        portfolio_json = json.dumps(st.session_state.portfolio)
+        board_data = fetch_portfolio_snapshots_cached(portfolio_json)
 
     # ── Predict all if requested ──────────────────────────────────────────
     if board_pred_all:
@@ -2035,15 +2165,46 @@ with tab4:
         st.session_state.mw_universe_c = universe_choice
         prog = st.progress(0.0, text=f"Loading {len(tl)} stocks (history, RSI, 52W)...")
         history, base = {}, []
+        
+        tickers_list = [item[0] for item in tl]
+        
+        try:
+            session = get_session()
+            raw_data = yf.download(
+                tickers_list,
+                start="2026-01-01",
+                group_by="ticker",
+                progress=False,
+                threads=True,
+                session=session
+            )
+        except Exception as e:
+            st.error(f"Failed to fetch market data: {e}")
+            raw_data = None
+            
         for idx, (sym, name, sector) in enumerate(tl):
             prog.progress((idx + 1) / len(tl), text=f"{sym} ({idx+1}/{len(tl)})")
             try:
-                df_t = yf.Ticker(sym).history(start="2026-01-01")
+                if raw_data is None or raw_data.empty:
+                    continue
+                
+                # Extract this ticker's df
+                if len(tickers_list) == 1:
+                    df_t = raw_data
+                else:
+                    if hasattr(raw_data.columns, 'levels') and sym in raw_data.columns.levels[0]:
+                        df_t = raw_data[sym]
+                    elif hasattr(raw_data.columns, 'levels') and sym in raw_data.columns.get_level_values(0):
+                        df_t = raw_data[sym]
+                    else:
+                        continue
+
                 if df_t is None or df_t.empty or len(df_t) < 2:
                     continue
                 df_t = df_t.dropna(subset=["Close"])
                 if len(df_t) < 2:
                     continue
+                
                 rsi = None
                 if len(df_t) >= 15:
                     try:
@@ -2055,6 +2216,7 @@ with tab4:
                         rsi = round(float(v), 1) if not np.isnan(v) else None
                     except:
                         pass
+                
                 vol = (
                     int(df_t["Volume"].iloc[-1])
                     if not np.isnan(df_t["Volume"].iloc[-1])

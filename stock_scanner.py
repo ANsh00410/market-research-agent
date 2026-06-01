@@ -30,6 +30,15 @@ _groq = Groq(api_key=os.getenv("GROQ_API_KEY"))
 #  SCORING ENGINE
 # ═════════════════════════════════════════════════════════════════
 
+def get_session():
+    import requests
+    session = requests.Session()
+    session.headers.update({
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
+    })
+    return session
+
+
 def score_stock(ticker: str, name: str, mode: str = "eod") -> dict | None:
     """
     Fetch data and compute a composite score (0–100) for a stock.
@@ -51,7 +60,8 @@ def score_stock(ticker: str, name: str, mode: str = "eod") -> dict | None:
         "eod":      {"rsi": 1.0, "ma": 2.0,  "momentum": 2.0,  "volume": 0.8, "pos52": 1.0, "pattern": 1.0},
     }.get(mode, {"rsi":1,"ma":1,"momentum":1,"volume":1,"pos52":1,"pattern":1})
     try:
-        stock = yf.Ticker(ticker)
+        session = get_session()
+        stock = yf.Ticker(ticker, session=session)
         df    = stock.history(period="2y")
         if df is None or df.empty or len(df) < 10:
             return None
