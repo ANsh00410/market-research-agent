@@ -1,42 +1,64 @@
-# agent.py
-from groq import Groq
-import json
+"""
+agent.py — Groq-powered Indian Market Research Agent
+Uses Llama 3.3 70B with tool-calling loop for deep market research.
+"""
+
 import os
+import json
+import time
+from groq import Groq
 from dotenv import load_dotenv
+
 from tools import search_web, search_indian_news
-from agent_tools import tools
 from stock_tools import get_stock_analysis, get_stock_sentiment
+from agent_tools import tools
 
 load_dotenv()
 
+# ─────────────────────────── Groq client ───────────────────────────────────
+
 client = Groq(api_key=os.getenv("GROQ_API_KEY"))
+MODEL = "llama-3.3-70b-versatile"
 
-SYSTEM_PROMPT = """You are an expert Indian market research analyst with deep knowledge of:
-- Indian economy, consumer behavior, and regional diversity
-- Indian regulatory environment (SEBI, RBI, TRAI, etc.)
-- Indian startup ecosystem (Tier 1, 2, 3 cities)
-- Key Indian platforms: Flipkart, Meesho, Zepto, Ola, Paytm, etc.
-- Indian demographics, income segments, and digital adoption trends
+# ─────────────────────────── System prompt ─────────────────────────────────
 
-When researching a topic:
-1. Search at least 5-6 times using different queries
-2. Look for India-specific data: market size in INR/USD, Indian players, govt policies
-3. Search for recent news on the topic
-4. Consider Indian-specific factors: price sensitivity, UPI adoption, regional languages, rural vs urban
+SYSTEM_PROMPT = """You are an elite Indian Market Research Analyst with deep expertise in:
 
-Your final report must include:
-- 📊 Market Overview (size, growth rate, TAM in Indian context)
-- 🏆 Key Indian Players & Competitors
-- 📈 Market Trends (India-specific)
-- 🌟 Opportunities & Market Gaps
-- ⚠️ Challenges & Risks (regulatory, competition, infrastructure)
-- 💰 Investment & Funding Landscape
-- 🎯 Target Segments (metro, tier-2, rural, age groups)
-- 📌 Conclusion & Recommendations
+**Indian Market Context:**
+- Indian consumer behavior across Tier 1 (Mumbai, Delhi, Bengaluru), Tier 2 (Pune, Hyderabad, Ahmedabad), and Tier 3 cities
+- Indian regulatory landscape: SEBI, RBI, TRAI, FSSAI, MCA, Competition Commission of India (CCI)
+- Government schemes: Make in India, Digital India, Startup India, PLI (Production Linked Incentive) schemes
+- Indian startup ecosystem: Unicorns, Soonicorns, funding rounds (Pre-Seed to IPO), valuations in INR/USD
+- Payment systems: UPI, BHIM, Paytm, PhonePe, NEFT/RTGS, RuPay
+- Indian e-commerce, quick commerce, D2C brands, fintech, edtech, healthtech, agritech, EV, SaaS
+- NSE/BSE stock market, Nifty 50, Sensex, FII/DII flows, SEBI regulations
+- Indian demographics: 1.4B population, median age 28, rising middle class, rural-urban migration
+- Pricing in INR, GST implications, import duties, MSME sector
 
-Always cite sources and mention if data is from 2025 or 2026."""
+**Your Research Methodology:**
+1. ALWAYS conduct a minimum of 5-6 searches before writing the final report
+2. Search for market size & TAM/SAM/SOM, key players, recent funding, trends, regulations
+3. Cross-reference multiple sources for accuracy
+4. Include specific INR/USD figures where available
+5. Cite data points, statistics, and company examples
 
-# Map tool names to actual functions
+**Report Structure (always follow this):**
+1. **Executive Summary** — 3-4 sentence overview with key market size
+2. **Market Overview** — Size, growth rate (CAGR), TAM/SAM/SOM in INR
+3. **Key Players & Competitive Landscape** — Top 5-8 companies with market share
+4. **Current Trends & Innovations** — 4-6 major trends with examples
+5. **Growth Opportunities** — Tier-wise breakdown, untapped segments
+6. **Challenges & Risks** — Regulatory, competitive, macroeconomic risks
+7. **Investment Landscape** — Recent funding rounds, VC interest, public market data
+8. **Target Segments** — Demographics, psychographics, Tier 1/2/3 breakdown
+9. **Strategic Recommendations** — 5 actionable recommendations for market entry/expansion
+
+**Tone:** Professional, data-driven, actionable. Use ₹ symbol for INR values.
+**Language:** English with Indian market terminology where appropriate.
+"""
+
+# ─────────────────────────── Tool map ──────────────────────────────────────
+
 tool_map = {
     "search_web": search_web,
     "search_indian_news": search_indian_news,
@@ -44,41 +66,85 @@ tool_map = {
     "get_stock_sentiment": get_stock_sentiment,
 }
 
+# ─────────────────────────── Agent loop ────────────────────────────────────
 
-def run_market_research_agent(topic: str) -> str:
-    print(f"\n🇮🇳 Starting Indian Market Research on: {topic}\n")
+
+def run_market_research_agent(
+    topic: str, status_callback=None, progress_callback=None
+) -> str:
+    """
+    Run the market research agent for a given topic.
+
+    Args:
+        topic:             The Indian market topic to research
+        status_callback:   Optional callable(str) for live status updates
+        progress_callback: Optional callable(float) for progress bar (0.0 – 1.0)
+
+    Returns:
+        Final market research report as a markdown string
+    """
+
+    def _log(msg: str):
+        if status_callback:
+            status_callback(msg)
+        else:
+            print(f"[Agent] {msg}")
+
+    def _progress(val: float):
+        if progress_callback:
+            progress_callback(val)
+
+    _log(f"Starting market research on: {topic}")
+    _progress(0.05)
 
     messages = [
         {"role": "system", "content": SYSTEM_PROMPT},
         {
             "role": "user",
-            "content": f"Conduct comprehensive market research for the Indian market on: {topic}. Focus on India-specific data, players, trends, and opportunities.",
+            "content": (
+                f"Conduct comprehensive market research on the Indian market for: **{topic}**\n\n"
+                f"Requirements:\n"
+                f"- Perform at least 5-6 distinct web/news searches\n"
+                f"- Gather market size, key players, trends, funding, regulations\n"
+                f"- Use actual data and statistics in INR where possible\n"
+                f"- Write a professional, detailed report following the 9-section structure\n"
+                f"- Be specific about Indian context (cities, regulations, payment methods, demographics)\n\n"
+                f"Start researching now."
+            ),
         },
     ]
 
     search_count = 0
+    max_iterations = 20
+    iteration = 0
 
-    # Agent loop
-    while True:
-        response = client.chat.completions.create(
-            model="llama-3.3-70b-versatile",  # Free and powerful
-            messages=messages,
-            tools=tools,
-            tool_choice="auto",
-            max_tokens=4096,
-            temperature=0.3,
-        )
+    while iteration < max_iterations:
+        iteration += 1
 
-        message = response.choices[0].message
-        finish_reason = response.choices[0].finish_reason
+        try:
+            response = client.chat.completions.create(
+                model=MODEL,
+                messages=messages,
+                tools=tools,
+                tool_choice="auto",
+                max_tokens=4096,
+                temperature=0.3,
+            )
+        except Exception as e:
+            _log(f"Groq API error: {e}")
+            time.sleep(2)
+            continue
 
-        # If the model wants to use tools
-        if finish_reason == "tool_calls" and message.tool_calls:
-            messages.append(
-                {
-                    "role": "assistant",
-                    "content": message.content,
-                    "tool_calls": [
+        choice = response.choices[0]
+        message = choice.message
+
+        # Append assistant message to history
+        messages.append(
+            {
+                "role": "assistant",
+                "content": message.content or "",
+                "tool_calls": (
+                    [
                         {
                             "id": tc.id,
                             "type": "function",
@@ -87,35 +153,97 @@ def run_market_research_agent(topic: str) -> str:
                                 "arguments": tc.function.arguments,
                             },
                         }
-                        for tc in message.tool_calls
-                    ],
-                }
-            )
+                        for tc in (message.tool_calls or [])
+                    ]
+                    if message.tool_calls
+                    else None
+                ),
+            }
+        )
 
-            # Execute each tool call
+        # ── Handle tool calls ─────────────────────────────────────────
+        if message.tool_calls:
             for tool_call in message.tool_calls:
-                func_name = tool_call.function.name
-                func_args = json.loads(tool_call.function.arguments)
+                fn_name = tool_call.function.name
+                try:
+                    fn_args = json.loads(tool_call.function.arguments)
+                except json.JSONDecodeError:
+                    fn_args = {}
 
-                search_count += 1
-                print(f"🔍 [{search_count}] {func_name}: {func_args.get('query', '')}")
+                _log(f"🔍 Calling tool: {fn_name}({_args_preview(fn_args)})")
 
-                # Call the actual function
-                result = tool_map[func_name](**func_args)
+                if fn_name in tool_map:
+                    try:
+                        result = tool_map[fn_name](**fn_args)
+                        search_count += 1
+                        _progress(min(0.1 + search_count * 0.1, 0.8))
+                    except Exception as e:
+                        result = {"error": str(e)}
+                else:
+                    result = {"error": f"Unknown tool: {fn_name}"}
 
-                # Add result to messages
+                # Append tool result
                 messages.append(
-                    {"role": "tool", "tool_call_id": tool_call.id, "content": result}
+                    {
+                        "role": "tool",
+                        "tool_call_id": tool_call.id,
+                        "content": json.dumps(result, default=str),
+                    }
                 )
 
-        # Final answer
-        elif finish_reason == "stop":
-            final_report = message.content or ""
-            print(f"\n✅ Research done! ({search_count} searches performed)\n")
-            return final_report
+        # ── Final answer ──────────────────────────────────────────────
+        elif choice.finish_reason == "stop":
+            if message.content and len(message.content) > 500:
+                _log("✅ Research complete! Generating final report...")
+                _progress(1.0)
+                return message.content
+            else:
+                # Model stopped too early — push it to write the report
+                messages.append(
+                    {
+                        "role": "user",
+                        "content": (
+                            f"You've gathered enough data. Now write the complete, detailed market research "
+                            f"report for '{topic}' following the 9-section structure. "
+                            f"Include specific numbers, company names, and actionable insights. "
+                            f"The report should be at least 1500 words."
+                        ),
+                    }
+                )
 
         else:
-            # Safety exit if something unexpected happens
-            break
+            # Handle other finish reasons
+            if message.content:
+                _log(f"Finish reason: {choice.finish_reason}")
+                if len(message.content) > 500:
+                    _progress(1.0)
+                    return message.content
 
-    return "Research could not be completed."
+    _log("⚠️ Max iterations reached. Returning best available report.")
+    _progress(1.0)
+
+    # Extract last substantial message
+    for msg in reversed(messages):
+        if msg.get("role") == "assistant" and len(msg.get("content", "")) > 200:
+            return msg["content"]
+
+    return (
+        f"# Market Research: {topic}\n\nUnable to complete research. Please try again."
+    )
+
+
+def _args_preview(args: dict) -> str:
+    """Compact preview of tool arguments for logging."""
+    preview = ", ".join(f"{k}={repr(v)[:40]}" for k, v in args.items())
+    return preview[:100]
+
+
+if __name__ == "__main__":
+    # Quick test
+    def status(msg):
+        print(f"  STATUS: {msg}")
+
+    report = run_market_research_agent("Quick Commerce market", status_callback=status)
+    print("\n" + "=" * 60)
+    print(report[:500])
+    print("...")

@@ -188,6 +188,7 @@ NSE_STOCKS = {
         ("BRIGADE",       "Brigade Enterprises"),
         ("MAHINDCIE",     "Mahindra CIE Automotive"),
         ("IRCON",         "IRCON International"),
+        ("NBCC",          "NBCC (India) Ltd"),
         ("RVNL",          "Rail Vikas Nigam"),
         ("IRB",           "IRB Infrastructure"),
         ("KNR",           "KNR Constructions"),
@@ -427,3 +428,160 @@ if __name__ == "__main__":
     print(f"Sectors: {len(NSE_STOCKS)}")
     for s, stocks in NSE_STOCKS.items():
         print(f"  {s}: {len(stocks)} stocks")
+
+# ─────────────────────────────────────────────────────────────────────────────
+#  NIFTY 500 — Dynamic fetcher
+#  Tries 3 sources in order:
+#  1. NSE India official CSV (most accurate, may block non-India IPs)
+#  2. Wikipedia Nifty 500 page (reliable fallback)
+#  3. Our curated ALL_STOCKS_DEDUPED list (offline fallback)
+# ─────────────────────────────────────────────────────────────────────────────
+
+_nifty500_cache: list[tuple[str, str]] | None = None   # (ticker.NS, name)
+
+
+def fetch_nifty500(force_refresh: bool = False) -> list[tuple[str, str]]:
+    """
+    Fetch the live Nifty 500 constituent list.
+    Returns list of (ticker_with_NS, company_name) tuples.
+    Cached in memory — only fetches once per process.
+    """
+    global _nifty500_cache
+    if _nifty500_cache and not force_refresh:
+        return _nifty500_cache
+
+    result = (
+        _fetch_nifty500_from_nse()
+        or _fetch_nifty500_from_wikipedia()
+        or _fetch_nifty500_from_local()
+    )
+    _nifty500_cache = result
+    return result
+
+
+def _fetch_nifty500_from_nse() -> list[tuple[str, str]] | None:
+    """Source 1: NSE India official index constituents CSV."""
+    try:
+        import requests, io, csv
+        headers = {
+            "User-Agent": "Mozilla/5.0",
+            "Referer":    "https://www.nseindia.com/",
+            "Accept":     "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+        }
+        # NSE requires a session cookie first
+        session = requests.Session()
+        session.get("https://www.nseindia.com", headers=headers, timeout=8)
+
+        url = ("https://www.nseindia.com/api/equity-stockIndices"
+               "?index=NIFTY%20500")
+        r = session.get(url, headers=headers, timeout=10)
+        data = r.json()
+
+        stocks = []
+        for item in data.get("data", []):
+            sym  = item.get("symbol", "").strip()
+            name = item.get("companyName", sym).strip()
+            if sym and sym != "NIFTY 500":
+                stocks.append((f"{sym}.NS", name))
+
+        if len(stocks) >= 400:
+            print(f"[Nifty500] NSE source: {len(stocks)} stocks")
+            return stocks
+    except Exception as e:
+        print(f"[Nifty500] NSE source failed: {e}")
+    return None
+
+
+def _fetch_nifty500_from_wikipedia() -> list[tuple[str, str]] | None:
+    """Source 2: Wikipedia list of Nifty 500 companies."""
+    try:
+        import requests
+        from bs4 import BeautifulSoup
+
+        url = "https://en.wikipedia.org/wiki/NIFTY_500"
+        r   = requests.get(url, timeout=10,
+                           headers={"User-Agent": "Mozilla/5.0"})
+        soup = BeautifulSoup(r.text, "html.parser")
+
+        stocks = []
+        for table in soup.find_all("table", {"class": "wikitable"}):
+            headers_row = [th.get_text(strip=True) for th in table.find_all("th")]
+            # Find symbol column
+            sym_col  = next((i for i, h in enumerate(headers_row)
+                             if "symbol" in h.lower() or "ticker" in h.lower()), None)
+            name_col = next((i for i, h in enumerate(headers_row)
+                             if "company" in h.lower() or "name" in h.lower()), None)
+            if sym_col is None:
+                continue
+            for row in table.find_all("tr")[1:]:
+                cells = row.find_all("td")
+                if not cells or len(cells) <= sym_col:
+                    continue
+                sym  = cells[sym_col].get_text(strip=True).replace(" ", "")
+                name = cells[name_col].get_text(strip=True) if name_col and len(cells) > name_col else sym
+                if sym:
+                    stocks.append((f"{sym}.NS", name))
+
+        if len(stocks) >= 200:
+            print(f"[Nifty500] Wikipedia source: {len(stocks)} stocks")
+            return stocks
+    except Exception as e:
+        print(f"[Nifty500] Wikipedia source failed: {e}")
+    return None
+
+
+def _fetch_nifty500_from_local() -> list[tuple[str, str]]:
+    """Source 3: Offline fallback — our curated list (400+ stocks)."""
+    print("[Nifty500] Using local curated list as fallback")
+    return [(t, n) for t, n, _ in ALL_STOCKS_DEDUPED]
+
+
+# ── Nifty 100 (Nifty 50 + Next 50) ──────────────────────────────────────────
+
+NIFTY_NEXT50 = [
+    "ADANIENSOL.NS", "ADANIENT.NS",  "ALKEM.NS",     "AMBUJACEM.NS",
+    "AUROPHARMA.NS", "BAJAJHFL.NS",  "BAJAJFINSV.NS","BANKBARODA.NS",
+    "BEL.NS",        "BERGEPAINT.NS","BIOCON.NS",     "BOSCHLTD.NS",
+    "CHOLAFIN.NS",   "COLPAL.NS",    "DALBHARAT.NS",  "DABUR.NS",
+    "DLF.NS",        "GAIL.NS",      "GLENMARK.NS",   "GODREJCP.NS",
+    "GODREJPROP.NS", "HAVELLS.NS",   "HDFCAMC.NS",    "HINDZINC.NS",
+    "ICICIPRULI.NS", "IDEA.NS",      "IDFCFIRSTB.NS", "IGL.NS",
+    "INDHOTEL.NS",   "INDUSTOWER.NS","IOC.NS",        "IRCTC.NS",
+    "JINDALSTEL.NS", "JUBLFOOD.NS",  "LICI.NS",       "LUPIN.NS",
+    "MARICO.NS",     "MCDOWELL-N.NS","MUTHOOTFIN.NS", "NMDC.NS",
+    "NYKAA.NS",      "OFSS.NS",      "PAGEIND.NS",    "PIIND.NS",
+    "POLYCAB.NS",    "SAIL.NS",      "SIEMENS.NS",    "TRENT.NS",
+    "VEDL.NS",       "ZYDUSLIFE.NS",
+]
+
+NIFTY100 = list(dict.fromkeys(NIFTY50 + NIFTY_NEXT50))  # deduped
+
+NIFTY_NEXT50_NAMES = {
+    "ADANIENSOL.NS": "Adani Energy Solutions", "ADANIENT.NS": "Adani Enterprises",
+    "ALKEM.NS": "Alkem Laboratories",          "AMBUJACEM.NS": "Ambuja Cements",
+    "AUROPHARMA.NS": "Aurobindo Pharma",        "BAJAJHFL.NS": "Bajaj Housing Finance",
+    "BAJAJFINSV.NS": "Bajaj Finserv",           "BANKBARODA.NS": "Bank of Baroda",
+    "BEL.NS": "Bharat Electronics",             "BERGEPAINT.NS": "Berger Paints",
+    "BIOCON.NS": "Biocon",                       "BOSCHLTD.NS": "Bosch India",
+    "CHOLAFIN.NS": "Cholamandalam Finance",      "COLPAL.NS": "Colgate-Palmolive",
+    "DALBHARAT.NS": "Dalmia Bharat",            "DABUR.NS": "Dabur India",
+    "DLF.NS": "DLF",                            "GAIL.NS": "GAIL India",
+    "GLENMARK.NS": "Glenmark Pharma",           "GODREJCP.NS": "Godrej Consumer",
+    "GODREJPROP.NS": "Godrej Properties",        "HAVELLS.NS": "Havells India",
+    "HDFCAMC.NS": "HDFC AMC",                   "HINDZINC.NS": "Hindustan Zinc",
+    "ICICIPRULI.NS": "ICICI Prudential",         "IDEA.NS": "Vodafone Idea",
+    "IDFCFIRSTB.NS": "IDFC First Bank",          "IGL.NS": "Indraprastha Gas",
+    "INDHOTEL.NS": "Indian Hotels",              "INDUSTOWER.NS": "Indus Towers",
+    "IOC.NS": "Indian Oil Corp",                "IRCTC.NS": "IRCTC",
+    "JINDALSTEL.NS": "Jindal Steel & Power",     "JUBLFOOD.NS": "Jubilant Foodworks",
+    "LICI.NS": "LIC India",                     "LUPIN.NS": "Lupin",
+    "MARICO.NS": "Marico",                       "MCDOWELL-N.NS": "United Spirits",
+    "MUTHOOTFIN.NS": "Muthoot Finance",          "NMDC.NS": "NMDC",
+    "NYKAA.NS": "Nykaa",                         "OFSS.NS": "Oracle Financial",
+    "PAGEIND.NS": "Page Industries",             "PIIND.NS": "PI Industries",
+    "POLYCAB.NS": "Polycab India",               "SAIL.NS": "SAIL",
+    "SIEMENS.NS": "Siemens India",               "TRENT.NS": "Trent",
+    "VEDL.NS": "Vedanta",                        "ZYDUSLIFE.NS": "Zydus Lifesciences",
+}
+
+NIFTY100_NAMES = {**NIFTY50_NAMES, **NIFTY_NEXT50_NAMES}

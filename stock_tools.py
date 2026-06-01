@@ -22,8 +22,8 @@ def get_stock_analysis(company_name: str, ticker: str = None) -> str:
         else:
             stock = yf.Ticker(ticker)
 
-        # Get 1 year of historical data
-        df = stock.history(period="6mo")
+        # Get 2 years of historical data to allow 200 DMA and 52W high/low calculations
+        df = stock.history(period="2y")
 
         if df.empty:
             return f"No stock data found for {company_name}. It may not be listed or ticker is wrong."
@@ -33,7 +33,7 @@ def get_stock_analysis(company_name: str, ticker: str = None) -> str:
         current_price = df["Close"].iloc[-1]
         price_1m_ago = df["Close"].iloc[-22] if len(df) > 22 else df["Close"].iloc[0]
         price_3m_ago = df["Close"].iloc[-66] if len(df) > 66 else df["Close"].iloc[0]
-        price_1y_ago = df["Close"].iloc[0]
+        price_1y_ago = df["Close"].iloc[-252] if len(df) > 252 else df["Close"].iloc[0]
 
         monthly_return = ((current_price - price_1m_ago) / price_1m_ago) * 100
         quarterly_return = ((current_price - price_3m_ago) / price_3m_ago) * 100
@@ -83,8 +83,9 @@ def get_stock_analysis(company_name: str, ticker: str = None) -> str:
             ma_signal = "🟡 MIXED signals"
 
         # 52-week high/low
-        week52_high = df["High"].max()
-        week52_low = df["Low"].min()
+        df_1y = df.tail(252)
+        week52_high = df_1y["High"].max()
+        week52_low = df_1y["Low"].min()
         distance_from_high = ((week52_high - current_price) / week52_high) * 100
 
         # Volume trend
@@ -148,13 +149,17 @@ def get_stock_analysis(company_name: str, ticker: str = None) -> str:
         return f"Error analyzing stock: {str(e)}"
 
 
-def get_stock_sentiment(company_name: str) -> str:
+def get_stock_sentiment(company_name: str, ticker: str = None) -> str:
     """Analyze news sentiment for a company's stock."""
     try:
-        with DDGS() as ddgs:
-            news_results = list(
-                ddgs.news(f"{company_name} stock NSE India", max_results=10)
-            )
+        if ticker:
+            stock = yf.Ticker(ticker)
+            news_results = stock.news
+        else:
+            with DDGS() as ddgs:
+                news_results = list(
+                    ddgs.news(f"{company_name} stock NSE India", max_results=10)
+                )
 
         if not news_results:
             return "No recent news found for sentiment analysis."
@@ -163,8 +168,13 @@ def get_stock_sentiment(company_name: str) -> str:
         news_summary = []
 
         for article in news_results:
+            # Handle both DDGS format and new yfinance format
             title = article.get("title", "")
             body = article.get("body", "")
+            if "content" in article and isinstance(article["content"], dict):
+                title = article["content"].get("title", title)
+                body = article["content"].get("summary", body)
+                
             text = title + " " + body
 
             # TextBlob sentiment
