@@ -60,8 +60,7 @@ def score_stock(ticker: str, name: str, mode: str = "eod") -> dict | None:
         "eod":      {"rsi": 1.0, "ma": 2.0,  "momentum": 2.0,  "volume": 0.8, "pos52": 1.0, "pattern": 1.0},
     }.get(mode, {"rsi":1,"ma":1,"momentum":1,"volume":1,"pos52":1,"pattern":1})
     try:
-        session = get_session()
-        stock = yf.Ticker(ticker, session=session)
+        stock = yf.Ticker(ticker)
         df    = stock.history(period="2y")
         if df is None or df.empty or len(df) < 10:
             return None

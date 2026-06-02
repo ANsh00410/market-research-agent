@@ -23,14 +23,13 @@ def get_stock_analysis(company_name: str, ticker: str = None) -> str:
     Ticker format for BSE: 'RELIANCE.BO'
     """
     try:
-        session = get_session()
         # If no ticker provided, try to guess it
         if not ticker:
             # Common Indian stock mapping
             nse_ticker = company_name.upper().replace(" ", "") + ".NS"
-            stock = yf.Ticker(nse_ticker, session=session)
+            stock = yf.Ticker(nse_ticker)
         else:
-            stock = yf.Ticker(ticker, session=session)
+            stock = yf.Ticker(ticker)
 
         # Get 2 years of historical data to allow 200 DMA and 52W high/low calculations
         df = stock.history(period="2y")
@@ -163,8 +162,7 @@ def get_stock_sentiment(company_name: str, ticker: str = None) -> str:
     """Analyze news sentiment for a company's stock."""
     try:
         if ticker:
-            session = get_session()
-            stock = yf.Ticker(ticker, session=session)
+            stock = yf.Ticker(ticker)
             news_results = stock.news
         else:
             with DDGS() as ddgs:

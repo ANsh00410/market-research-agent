@@ -526,7 +526,6 @@ def fetch_portfolio_snapshots_cached(portfolio_entries_json):
     if not tickers:
         return {}
 
-    session = get_session()
     raw_data = None
     err_msg = "Unknown error"
     
@@ -537,8 +536,7 @@ def fetch_portfolio_snapshots_cached(portfolio_entries_json):
             period="5y",
             group_by="ticker",
             progress=False,
-            threads=True,
-            session=session
+            threads=True
         )
     except Exception as e:
         err_msg = str(e)
@@ -579,7 +577,7 @@ def fetch_portfolio_snapshots_cached(portfolio_entries_json):
             cur = hist_close
             prev = prev_close
             try:
-                stock_obj = yf.Ticker(ticker, session=session)
+                stock_obj = yf.Ticker(ticker)
                 fi = stock_obj.fast_info
                 live_price = float(fi.last_price)
                 prev_close_ = float(fi.previous_close) if fi.previous_close else prev_close
@@ -648,8 +646,7 @@ def fetch_portfolio_snapshots_cached(portfolio_entries_json):
 @st.cache_data(ttl=60, show_spinner=False)
 def _fetch_stock_snapshot_cached(company, ticker):
     time.sleep(0.5)  # Add small delay to prevent batch rate-limiting
-    session = get_session()
-    stock = yf.Ticker(ticker, session=session)
+    stock = yf.Ticker(ticker)
 
     # ── Historical data for indicators (5 Years) ──────────────────
     df = stock.history(period="5y")
@@ -758,8 +755,7 @@ def _fetch_stock_snapshot_cached(company, ticker):
 def fetch_hourly_data_cached(ticker):
     try:
         time.sleep(0.5)
-        session = get_session()
-        stock = yf.Ticker(ticker, session=session)
+        stock = yf.Ticker(ticker)
         df = stock.history(period="1mo", interval="1h")
         if not df.empty:
             df = df.dropna(subset=["Close"])
@@ -1180,6 +1176,282 @@ def build_tradingview_lightweight_chart(
     """
     return html_code
 
+
+# ─────────────────────────── Smart Action Advisor ──────────────────────────
+
+
+def compute_smart_action(entry: dict, snap: dict, pred_result: dict = None) -> dict:
+    """
+    Smart Action Advisor — analyzes portfolio holdings and recommends:
+    BUY MORE, HOLD, or EXIT with reasoning, targets, and opportunity analysis.
+
+    Uses: RSI, MA20/MA50 positioning, 52W range, trend, P&L%, prediction engine.
+    """
+    price = float(snap["current_price"])
+    avg_buy = float(entry["avg_price"])
+    qty = int(entry["quantity"])
+    rsi = float(snap.get("rsi", 50.0) or 50.0)
+    ma20 = float(snap.get("ma20", 0) or 0)
+    ma50 = float(snap.get("ma50", 0) or 0)
+    w52_high = float(snap.get("week52_high", price))
+    w52_low = float(snap.get("week52_low", price))
+    return_1m = float(snap.get("return_1m", 0) or 0)
+    signal = snap.get("signal", "NEUTRAL")
+
+    # ── P&L analysis ──
+    pnl_pct = (price - avg_buy) / avg_buy * 100.0 if avg_buy > 0 else 0.0
+    inv_value = qty * avg_buy
+    cur_value = qty * price
+    pnl_rupees = cur_value - inv_value
+
+    # ── 52W position (0% = at 52W low, 100% = at 52W high) ──
+    w52_range = w52_high - w52_low if w52_high > w52_low else 1.0
+    w52_position = (price - w52_low) / w52_range * 100.0
+
+    # ── Scoring system for action recommendation ──
+    # Positive score = BUY MORE, Negative score = EXIT
+    action_score = 0.0
+    reasons_buy = []
+    reasons_exit = []
+    reasons_hold = []
+
+    # RSI analysis
+    if rsi < 30:
+        action_score += 30
+        reasons_buy.append(f"RSI at {rsi:.1f} — heavily oversold, strong bounce potential")
+    elif rsi < 40:
+        action_score += 15
+        reasons_buy.append(f"RSI at {rsi:.1f} — oversold territory, buying opportunity")
+    elif rsi > 75:
+        action_score -= 30
+        reasons_exit.append(f"RSI at {rsi:.1f} — heavily overbought, correction likely")
+    elif rsi > 65:
+        action_score -= 10
+        reasons_exit.append(f"RSI at {rsi:.1f} — nearing overbought, momentum fading")
+    else:
+        reasons_hold.append(f"RSI at {rsi:.1f} — neutral zone")
+
+    # MA positioning
+    if ma20 > 0 and ma50 > 0:
+        if price > ma20 and price > ma50:
+            action_score += 10
+            reasons_buy.append("Price above both MA20 & MA50 — uptrend intact")
+        elif price < ma20 and price < ma50:
+            action_score -= 15
+            reasons_exit.append("Price below both MA20 & MA50 — downtrend pressure")
+        elif price > ma50 and price < ma20:
+            reasons_hold.append("Price between MA50 (support) and MA20 — consolidating")
+        if ma20 > ma50:
+            action_score += 5
+            reasons_buy.append("MA20 > MA50 — golden cross / bullish structure")
+        elif ma20 < ma50 * 0.98:
+            action_score -= 5
+            reasons_exit.append("MA20 < MA50 — death cross / bearish structure")
+
+    # 52W range positioning
+    if w52_position < 15:
+        action_score += 20
+        reasons_buy.append(f"Near 52W low ({w52_position:.0f}% from bottom) — deep value zone")
+    elif w52_position < 30:
+        action_score += 10
+        reasons_buy.append(f"In lower 30% of 52W range — value territory")
+    elif w52_position > 90:
+        action_score -= 20
+        reasons_exit.append(f"Near 52W high ({w52_position:.0f}% of range) — limited upside")
+    elif w52_position > 75:
+        action_score -= 10
+        reasons_exit.append(f"In upper 25% of 52W range — approaching resistance ceiling")
+
+    # 1-month return momentum
+    if return_1m < -8:
+        action_score += 10
+        reasons_buy.append(f"1M return {return_1m:+.1f}% — recent dip = buying opportunity")
+    elif return_1m > 15:
+        action_score -= 10
+        reasons_exit.append(f"1M return {return_1m:+.1f}% — sharp run-up, profit booking zone")
+
+    # P&L-based profit booking signals
+    if pnl_pct > 50:
+        action_score -= 10
+        reasons_exit.append(f"Already +{pnl_pct:.1f}% profit — consider partial profit booking")
+    elif pnl_pct > 25:
+        action_score -= 5
+        reasons_exit.append(f"+{pnl_pct:.1f}% profit — set trailing stop loss to protect gains")
+    elif pnl_pct < -15:
+        reasons_hold.append(f"In {pnl_pct:.1f}% loss — averaging down may be risky without trend reversal")
+
+    # Prediction engine data (if available)
+    pred_direction = None
+    pred_target = None
+    pred_confidence = None
+    if pred_result and "error" not in pred_result:
+        pred = pred_result.get("prediction", {})
+        quant = pred_result.get("quant_prediction", {})
+        pred_direction = pred.get("direction", quant.get("direction"))
+        pred_target = pred.get("price_target", quant.get("price_target"))
+        pred_confidence = pred.get("confidence", quant.get("confidence", 50))
+
+        if pred_direction == "BULLISH" and pred_confidence and pred_confidence > 70:
+            action_score += 15
+            reasons_buy.append(f"AI prediction: BULLISH ({pred_confidence:.0f}% confidence)")
+        elif pred_direction == "BEARISH" and pred_confidence and pred_confidence > 70:
+            action_score -= 15
+            reasons_exit.append(f"AI prediction: BEARISH ({pred_confidence:.0f}% confidence)")
+
+    # ── Determine final action ──
+    if action_score >= 20:
+        action = "BUY MORE"
+        action_icon = "🟢"
+        action_color = "#00c853"
+        action_bg = "rgba(0,200,83,0.08)"
+        action_border = "rgba(0,200,83,0.4)"
+    elif action_score <= -20:
+        action = "EXIT / BOOK PROFIT"
+        action_icon = "🔴"
+        action_color = "#ff1744"
+        action_bg = "rgba(255,23,68,0.08)"
+        action_border = "rgba(255,23,68,0.4)"
+    else:
+        action = "HOLD"
+        action_icon = "🟡"
+        action_color = "#ffd600"
+        action_bg = "rgba(255,214,0,0.08)"
+        action_border = "rgba(255,214,0,0.4)"
+
+    # ── Compute opportunity analysis ──
+    # If you bought more at avg_buy, how much would you have gained?
+    opportunity_pct = pnl_pct  # same as current P&L%
+    # What if you invested ₹10,000 more at current levels?
+    hypothetical_invest = 10000.0
+    hypothetical_qty = int(hypothetical_invest / price) if price > 0 else 0
+
+    # ── Compute target exit price ──
+    if pred_target and pred_target > 0:
+        exit_target = float(pred_target)
+    elif action == "EXIT / BOOK PROFIT":
+        # Use resistance or a small buffer above current
+        exit_target = price * 1.02  # exit near current if bearish
+    else:
+        # Use resistance as target
+        exit_target = w52_high * 0.95 if w52_high > price else price * 1.10
+
+    # Potential gain if bought now and exited at target
+    if_bought_now_gain = (exit_target - price) / price * 100.0 if price > 0 else 0
+    if_bought_now_rupees = hypothetical_qty * (exit_target - price) if hypothetical_qty > 0 else 0
+
+    return {
+        "action": action,
+        "action_icon": action_icon,
+        "action_color": action_color,
+        "action_bg": action_bg,
+        "action_border": action_border,
+        "action_score": action_score,
+        "reasons_buy": reasons_buy,
+        "reasons_exit": reasons_exit,
+        "reasons_hold": reasons_hold,
+        "pnl_pct": pnl_pct,
+        "pnl_rupees": pnl_rupees,
+        "opportunity_pct": opportunity_pct,
+        "w52_position": w52_position,
+        "exit_target": round(exit_target, 2),
+        "if_bought_now_gain": round(if_bought_now_gain, 2),
+        "if_bought_now_rupees": round(if_bought_now_rupees, 2),
+        "hypothetical_qty": hypothetical_qty,
+        "hypothetical_invest": hypothetical_invest,
+        "pred_direction": pred_direction,
+        "pred_confidence": pred_confidence,
+    }
+
+
+def render_smart_action(entry: dict, snap: dict, smart: dict) -> str:
+    """Render the Smart Action Advisor card as HTML."""
+    price = snap["current_price"]
+    avg_buy = entry["avg_price"]
+    qty = entry["quantity"]
+
+    action = smart["action"]
+    icon = smart["action_icon"]
+    color = smart["action_color"]
+    bg = smart["action_bg"]
+    border = smart["action_border"]
+
+    # Build reason bullets
+    all_reasons = []
+    for r in smart["reasons_buy"]:
+        all_reasons.append(f"<span style='color:#00ff88;'>▲</span> {r}")
+    for r in smart["reasons_exit"]:
+        all_reasons.append(f"<span style='color:#ff4444;'>▼</span> {r}")
+    for r in smart["reasons_hold"]:
+        all_reasons.append(f"<span style='color:#ffd600;'>●</span> {r}")
+    reasons_html = "<br>".join(all_reasons[:5])  # Show top 5 reasons
+
+    # Opportunity section
+    pnl_pct = smart["pnl_pct"]
+    if pnl_pct > 0:
+        opp_text = (
+            f"You're up <b style='color:#00ff88;'>{pnl_pct:+.2f}%</b> from your avg buy of ₹{avg_buy:,.2f}. "
+        )
+    else:
+        opp_text = (
+            f"Currently at <b style='color:#ff4444;'>{pnl_pct:+.2f}%</b> from your avg buy of ₹{avg_buy:,.2f}. "
+        )
+
+    hyp_qty = smart["hypothetical_qty"]
+    hyp_gain = smart["if_bought_now_gain"]
+    hyp_rupees = smart["if_bought_now_rupees"]
+    exit_target = smart["exit_target"]
+
+    if hyp_qty > 0 and hyp_gain > 0:
+        if_buy_html = (
+            f"If you invest <b>₹{smart['hypothetical_invest']:,.0f}</b> more now "
+            f"(≈{hyp_qty} shares at ₹{price:,.2f}), and exit at target <b>₹{exit_target:,.2f}</b>, "
+            f"potential gain: <b style='color:#00ff88;'>₹{hyp_rupees:,.0f} (+{hyp_gain:.2f}%)</b>"
+        )
+    elif hyp_gain <= 0:
+        if_buy_html = (
+            f"Target price ₹{exit_target:,.2f} is below current price — "
+            f"<b style='color:#ff4444;'>not a good entry point right now</b>"
+        )
+    else:
+        if_buy_html = ""
+
+    # 52W position bar
+    w52_pos = smart["w52_position"]
+    bar_color = "#00ff88" if w52_pos < 40 else ("#ffd600" if w52_pos < 70 else "#ff4444")
+
+    return f"""<div style="background:{bg};border:1px solid {border};border-radius:12px;padding:16px 20px;margin:12px 0;border-left:5px solid {color};">
+<div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:8px;">
+  <div>
+    <div style="font-family:'Syne',sans-serif;font-size:0.7rem;opacity:0.6;text-transform:uppercase;letter-spacing:1px;color:white;">🧠 Smart Action Advisor</div>
+    <div style="font-family:'Syne',sans-serif;font-size:1.5rem;font-weight:800;color:{color};margin-top:4px;">{icon} {action}</div>
+  </div>
+  <div style="text-align:right;">
+    <div style="font-size:0.75rem;color:#aaa;">Target Exit Price</div>
+    <div style="font-family:'Syne',sans-serif;font-size:1.2rem;font-weight:700;color:white;">🎯 ₹{exit_target:,.2f}</div>
+    <div style="font-size:0.72rem;color:#888;">Score: {smart['action_score']:+.0f}</div>
+  </div>
+</div>
+
+<div style="margin-top:12px;font-size:0.82rem;color:rgba(255,255,255,0.9);line-height:1.7;">
+  {reasons_html}
+</div>
+
+<div style="margin-top:14px;display:flex;gap:10px;flex-wrap:wrap;">
+  <div style="flex:1;min-width:200px;background:rgba(0,0,0,0.25);border-radius:8px;padding:10px 14px;">
+    <div style="font-size:0.68rem;color:#aaa;text-transform:uppercase;margin-bottom:4px;">📊 52W Position</div>
+    <div style="width:100%;height:8px;background:rgba(255,255,255,0.1);border-radius:4px;overflow:hidden;">
+      <div style="width:{w52_pos:.0f}%;height:100%;background:{bar_color};border-radius:4px;"></div>
+    </div>
+    <div style="font-size:0.72rem;color:#ccc;margin-top:4px;">{w52_pos:.1f}% from 52W low → {'Near bottom 🟢' if w52_pos < 30 else ('Mid range 🟡' if w52_pos < 70 else 'Near top 🔴')}</div>
+  </div>
+  <div style="flex:1;min-width:200px;background:rgba(0,0,0,0.25);border-radius:8px;padding:10px 14px;">
+    <div style="font-size:0.68rem;color:#aaa;text-transform:uppercase;margin-bottom:4px;">💰 Opportunity Analysis</div>
+    <div style="font-size:0.82rem;color:rgba(255,255,255,0.9);line-height:1.6;">
+      {opp_text}<br>{if_buy_html}
+    </div>
+  </div>
+</div>
+</div>"""
 
 
 # ─────────────────────────── Prediction card renderer ──────────────────────
@@ -1663,12 +1935,12 @@ with tab2:
             st.caption(f"Avg buy: ₹{entry['avg_price']:,.2f}")
             ma_parts = []
             if snap.get("ma20"):
-                ma_parts.append(f"MA20 ₹{snap['ma20']:,.0f}")
+                ma_parts.append(f"MA20 ₹{snap['ma20']:,.2f}")
             if snap.get("ma50"):
-                ma_parts.append(f"MA50 ₹{snap['ma50']:,.0f}")
+                ma_parts.append(f"MA50 ₹{snap['ma50']:,.2f}")
             if ma_parts:
                 st.caption(" · ".join(ma_parts))
-            st.caption(f"52W: ₹{snap['week52_low']:,.0f} – ₹{snap['week52_high']:,.0f}")
+            st.caption(f"52W: ₹{snap['week52_low']:,.2f} – ₹{snap['week52_high']:,.2f}")
             st.markdown(_signal_badge(snap["signal"]), unsafe_allow_html=True)
 
             # ── Extra metrics ────────────────────────────────────────
@@ -1698,8 +1970,58 @@ with tab2:
             else:
                 st.info("No chart data available.")
 
-        if st.button("🗑️ Remove from portfolio", key=f"remove_{pred_key}"):
+        # ── Smart Action Advisor ──────────────────────────────────────
+        smart = compute_smart_action(entry, snap, pred_result)
+        st.markdown(
+            render_smart_action(entry, snap, smart),
+            unsafe_allow_html=True,
+        )
+
+        # ── Edit / Remove buttons ─────────────────────────────────────
+        btn_edit, btn_rm, _ = st.columns([1, 1, 4])
+        edit_toggled = btn_edit.button("✏️ Edit", key=f"edit_{pred_key}")
+        if btn_rm.button("🗑️ Remove", key=f"remove_{pred_key}"):
             to_remove.append(pred_key)
+
+        # Toggle edit state
+        edit_state_key = f"editing_{pred_key}"
+        if edit_toggled:
+            st.session_state[edit_state_key] = not st.session_state.get(edit_state_key, False)
+
+        if st.session_state.get(edit_state_key, False):
+            with st.container():
+                st.markdown(
+                    f"<div style='background:rgba(255,107,53,0.08);border:1px solid rgba(255,107,53,0.3);"
+                    f"border-radius:10px;padding:16px 20px;margin:8px 0 16px;'>"
+                    f"<span style='font-family:Syne,sans-serif;font-weight:700;font-size:0.9rem;"
+                    f"color:#FF6B35;'>✏️ Edit {entry['company']}</span></div>",
+                    unsafe_allow_html=True,
+                )
+                ec1, ec2, ec3 = st.columns([1, 1, 1])
+                new_qty = ec1.number_input(
+                    "Quantity",
+                    min_value=1,
+                    value=entry["quantity"],
+                    key=f"eq_{pred_key}",
+                )
+                new_avg = ec2.number_input(
+                    "Avg Buy Price (₹)",
+                    min_value=0.01,
+                    value=float(entry["avg_price"]),
+                    format="%.2f",
+                    key=f"eap_{pred_key}",
+                )
+                if ec3.button("💾 Save", key=f"save_{pred_key}", type="primary"):
+                    # Update entry in session state
+                    for e in st.session_state.portfolio:
+                        if e["id"] == pred_key:
+                            e["quantity"] = new_qty
+                            e["avg_price"] = new_avg
+                            break
+                    save_portfolio(st.session_state.portfolio)
+                    st.session_state[edit_state_key] = False
+                    st.success(f"Updated {entry['company']}: Qty={new_qty}, Avg Buy=₹{new_avg:,.2f}")
+                    st.rerun()
 
         st.divider()
 
@@ -2169,14 +2491,12 @@ with tab4:
         tickers_list = [item[0] for item in tl]
         
         try:
-            session = get_session()
             raw_data = yf.download(
                 tickers_list,
                 start="2026-01-01",
                 group_by="ticker",
                 progress=False,
-                threads=True,
-                session=session
+                threads=True
             )
         except Exception as e:
             st.error(f"Failed to fetch market data: {e}")
