@@ -14,3 +14,5 @@ feedparser
 streamlit-autorefresh
 beautifulsoup4
 requests
+gymnasium
+stable-baselines3

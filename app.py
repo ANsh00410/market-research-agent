@@ -467,13 +467,14 @@ def render_hot_news():
 
 st.markdown(render_hot_news(), unsafe_allow_html=True)
 
-tab1, tab2, tab3, tab4, tab5 = st.tabs(
+tab1, tab2, tab3, tab4, tab5, tab6 = st.tabs(
     [
         "🔍  Market Research",
         "📈  Portfolio Tracker",
         "📊  Ticker Board",
         "🌐  NSE Market Watch",
         "🎯  Smart Recommendations",
+        "🤖  RL Simulator",
     ]
 )
 
@@ -3394,6 +3395,486 @@ with tab5:
     The AI will score every stock on 6 signals — RSI, MA alignment, momentum,
     volume surge, 52W position, and Bulkowski chart patterns —
     then rank the best <b>BUY</b> and <b>SELL/AVOID</b> picks for you.
+  </div>
+</div>""",
+            unsafe_allow_html=True,
+        )
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+#  TAB 6 — RL TRADING SIMULATOR
+# ═══════════════════════════════════════════════════════════════════════════
+
+with tab6:
+    st.markdown(
+        '<p class="section-title">🤖 RL Trading Simulator</p>',
+        unsafe_allow_html=True,
+    )
+    st.caption(
+        "Train a Reinforcement Learning agent (PPO / A2C / DQN) on historical NSE data "
+        "and backtest against Buy & Hold • Powered by Stable-Baselines3 & Gymnasium"
+    )
+
+    # ── How it works ──────────────────────────────────────────────────────
+    with st.expander("📖 How this works — RL Trading explained", expanded=False):
+        st.markdown(
+            """
+<div style="padding:4px 0">
+
+<div style="font-family:'Syne',sans-serif;font-size:1rem;font-weight:700;color:#FF9A3C;margin-bottom:12px;">
+  🧠 What is RL Trading?
+</div>
+
+<div style="font-size:.88rem;color:rgba(255,255,255,.85);line-height:1.7;margin-bottom:16px;">
+  A <b>Reinforcement Learning (RL)</b> agent learns a trading policy by interacting with historical
+  market data. It observes technical indicators (RSI, MACD, Bollinger Bands, Moving Averages)
+  and decides to <b>BUY</b>, <b>HOLD</b>, or <b>SELL</b> at each time step.
+  <br><br>
+  The agent is rewarded for portfolio growth and penalised for drawdowns. Over thousands of
+  training episodes, it discovers patterns and timing strategies that maximize returns.
+</div>
+
+<table style="width:100%;border-collapse:collapse;font-size:.85rem;">
+  <thead>
+    <tr style="background:rgba(255,107,53,.2);">
+      <th style="padding:10px 14px;text-align:left;color:#FF9A3C;">Component</th>
+      <th style="padding:10px 14px;text-align:left;color:#FF9A3C;">Description</th>
+    </tr>
+  </thead>
+  <tbody>
+    <tr style="border-bottom:1px solid rgba(255,255,255,.07);">
+      <td style="padding:10px 14px;color:#FFD700;font-weight:700;">📊 Observations</td>
+      <td style="padding:10px 14px;color:#ccc;">RSI, MACD, Bollinger Width, MA ratios, volume ratio, 5D return, position & P&L</td>
+    </tr>
+    <tr style="border-bottom:1px solid rgba(255,255,255,.07);">
+      <td style="padding:10px 14px;color:#FFD700;font-weight:700;">🎯 Actions</td>
+      <td style="padding:10px 14px;color:#ccc;">BUY (go all-in), HOLD (do nothing), SELL (exit position)</td>
+    </tr>
+    <tr style="border-bottom:1px solid rgba(255,255,255,.07);">
+      <td style="padding:10px 14px;color:#FFD700;font-weight:700;">💰 Reward</td>
+      <td style="padding:10px 14px;color:#ccc;">Log-return of portfolio value + drawdown penalty + trade cost penalty</td>
+    </tr>
+    <tr>
+      <td style="padding:10px 14px;color:#FFD700;font-weight:700;">🔀 Train/Test</td>
+      <td style="padding:10px 14px;color:#ccc;">80% training (agent learns), 20% testing (out-of-sample backtest)</td>
+    </tr>
+  </tbody>
+</table>
+
+<div style="margin-top:16px;padding:12px 16px;background:rgba(255,107,53,.1);border-left:3px solid #FF6B35;border-radius:0 8px 8px 0;font-size:.82rem;color:#ccc;">
+  ⚠️ <b style="color:white">Disclaimer:</b> This is an educational simulator. RL trading models trained on
+  limited data may overfit. Do NOT use for real trading without extensive validation.
+</div>
+
+</div>
+""",
+            unsafe_allow_html=True,
+        )
+
+    # ── Configuration ─────────────────────────────────────────────────────
+    st.markdown("---")
+    st.markdown(
+        '<div style="font-family:\'Syne\',sans-serif;font-size:1.05rem;font-weight:700;'
+        'color:#FF9A3C;border-left:4px solid #FF9A3C;padding-left:12px;margin:16px 0 14px;">'
+        '⚙️ Configuration</div>',
+        unsafe_allow_html=True,
+    )
+
+    rc1, rc2, rc3, rc4 = st.columns(4)
+
+    with rc1:
+        from nse_stocks import NIFTY50, NIFTY50_NAMES
+
+        rl_ticker_options = {v: k for k, v in NIFTY50_NAMES.items()}
+        rl_ticker_name = st.selectbox(
+            "📈 Select Stock",
+            list(rl_ticker_options.keys()),
+            index=list(rl_ticker_options.keys()).index("Reliance"),
+            key="rl_ticker_select",
+        )
+        rl_ticker = rl_ticker_options[rl_ticker_name]
+
+    with rc2:
+        rl_period = st.selectbox(
+            "📅 Historical Period",
+            ["1y", "2y", "5y"],
+            index=1,
+            format_func=lambda x: {"1y": "1 Year", "2y": "2 Years", "5y": "5 Years"}[x],
+            key="rl_period",
+        )
+
+    with rc3:
+        rl_algo = st.selectbox(
+            "🧠 Algorithm",
+            ["PPO", "A2C", "DQN"],
+            index=0,
+            key="rl_algo",
+            help="PPO is recommended. DQN is better for discrete actions. A2C is faster but noisier.",
+        )
+
+    with rc4:
+        rl_timesteps = st.select_slider(
+            "🔄 Training Steps",
+            options=[5_000, 10_000, 20_000, 30_000, 50_000],
+            value=10_000,
+            key="rl_timesteps",
+            help="More steps = better policy but slower training.",
+        )
+
+    rc5, rc6, rc7, _ = st.columns([1, 1, 1, 1])
+    with rc5:
+        rl_balance = st.number_input(
+            "💰 Initial Balance (₹)",
+            min_value=10_000,
+            max_value=10_000_000,
+            value=100_000,
+            step=10_000,
+            key="rl_balance",
+        )
+    with rc6:
+        rl_fee = st.slider(
+            "📊 Transaction Fee %",
+            min_value=0.0,
+            max_value=0.5,
+            value=0.1,
+            step=0.05,
+            format="%.2f%%",
+            key="rl_fee",
+        )
+    with rc7:
+        rl_custom_ticker = st.text_input(
+            "🔤 Or Custom Ticker",
+            placeholder="e.g. TATAMOTORS.NS",
+            key="rl_custom_ticker",
+        )
+
+    final_ticker = rl_custom_ticker.strip().upper() if rl_custom_ticker.strip() else rl_ticker
+
+    # ── Run button ────────────────────────────────────────────────────────
+    st.markdown("")
+    run_col, info_col, _ = st.columns([1.5, 3, 2])
+    run_rl = run_col.button(
+        "🚀 Run Simulation", type="primary", key="rl_run_btn", use_container_width=True
+    )
+    info_col.markdown(
+        f'<div style="font-size:.82rem;color:#aaa;padding-top:8px;">'
+        f'Will train <b style="color:#FFD700">{rl_algo}</b> on '
+        f'<b style="color:#00ff88">{final_ticker}</b> for '
+        f'<b style="color:#FF9A3C">{rl_timesteps:,}</b> steps '
+        f'(₹{rl_balance:,.0f} balance, {rl_fee:.2f}% fee)</div>',
+        unsafe_allow_html=True,
+    )
+
+    # ── Session state for results ─────────────────────────────────────────
+    if "rl_results" not in st.session_state:
+        st.session_state.rl_results = None
+
+    if run_rl:
+        st.markdown("---")
+        prog_bar = st.progress(0.0, text="Initializing...")
+        log_placeholder = st.empty()
+        log_msgs = []
+
+        def _rl_progress(pct, msg):
+            prog_bar.progress(min(pct, 1.0), text=msg)
+            ts = datetime.now().strftime("%H:%M:%S")
+            log_msgs.append(f"[{ts}] {msg}")
+            log_placeholder.markdown(
+                f'<div class="status-log">{"<br>".join(log_msgs[-6:])}</div>',
+                unsafe_allow_html=True,
+            )
+
+        try:
+            from rl_simulator import train_and_backtest
+
+            results = train_and_backtest(
+                ticker=final_ticker,
+                period=rl_period,
+                algorithm=rl_algo,
+                timesteps=rl_timesteps,
+                initial_balance=float(rl_balance),
+                fee_pct=rl_fee / 100.0,
+                progress_callback=_rl_progress,
+            )
+            st.session_state.rl_results = results
+            prog_bar.progress(1.0, text="✅ Simulation complete!")
+            st.success(
+                f"Training complete! {rl_algo} agent trained on {results['train_days']} days, "
+                f"backtested on {results['test_days']} days."
+            )
+
+        except Exception as e:
+            st.error(f"❌ Simulation failed: {str(e)}")
+            st.session_state.rl_results = None
+
+    # ── Display results ───────────────────────────────────────────────────
+    results = st.session_state.rl_results
+    if results:
+        metrics = results["metrics"]
+
+        st.markdown("---")
+        st.markdown(
+            '<div style="font-family:\'Syne\',sans-serif;font-size:1.05rem;font-weight:700;'
+            'color:#FF9A3C;border-left:4px solid #FF9A3C;padding-left:12px;margin:16px 0 14px;">'
+            f'📊 Results — {results["ticker"]} ({results["algorithm"]}, '
+            f'{results["timesteps"]:,} steps)</div>',
+            unsafe_allow_html=True,
+        )
+
+        # ── Metric cards ──────────────────────────────────────────────
+        mc1, mc2, mc3, mc4, mc5, mc6 = st.columns(6)
+
+        # Determine colors
+        rl_color = "#00ff88" if metrics["rl_return"] >= 0 else "#ff4444"
+        bh_color = "#00ff88" if metrics["bh_return"] >= 0 else "#ff4444"
+        alpha_color = "#00ff88" if metrics["alpha"] >= 0 else "#ff4444"
+
+        mc1.markdown(
+            f"""<div style="background:rgba(0,0,0,.3);border:1px solid rgba(255,255,255,.1);
+            border-radius:12px;padding:16px;text-align:center;">
+            <div style="font-size:.7rem;color:#aaa;text-transform:uppercase;letter-spacing:1px;">🤖 RL Return</div>
+            <div style="font-family:'Syne',sans-serif;font-size:1.4rem;font-weight:800;color:{rl_color};margin-top:4px;">
+            {metrics['rl_return']:+.2f}%</div>
+            <div style="font-size:.72rem;color:#888;margin-top:2px;">₹{metrics['final_value']:,.0f}</div>
+            </div>""",
+            unsafe_allow_html=True,
+        )
+        mc2.markdown(
+            f"""<div style="background:rgba(0,0,0,.3);border:1px solid rgba(255,255,255,.1);
+            border-radius:12px;padding:16px;text-align:center;">
+            <div style="font-size:.7rem;color:#aaa;text-transform:uppercase;letter-spacing:1px;">📈 Buy & Hold</div>
+            <div style="font-family:'Syne',sans-serif;font-size:1.4rem;font-weight:800;color:{bh_color};margin-top:4px;">
+            {metrics['bh_return']:+.2f}%</div>
+            </div>""",
+            unsafe_allow_html=True,
+        )
+        mc3.markdown(
+            f"""<div style="background:rgba(0,0,0,.3);border:1px solid rgba(255,255,255,.1);
+            border-radius:12px;padding:16px;text-align:center;">
+            <div style="font-size:.7rem;color:#aaa;text-transform:uppercase;letter-spacing:1px;">⚡ Alpha</div>
+            <div style="font-family:'Syne',sans-serif;font-size:1.4rem;font-weight:800;color:{alpha_color};margin-top:4px;">
+            {metrics['alpha']:+.2f}%</div>
+            </div>""",
+            unsafe_allow_html=True,
+        )
+        mc4.markdown(
+            f"""<div style="background:rgba(0,0,0,.3);border:1px solid rgba(255,255,255,.1);
+            border-radius:12px;padding:16px;text-align:center;">
+            <div style="font-size:.7rem;color:#aaa;text-transform:uppercase;letter-spacing:1px;">📐 Sharpe Ratio</div>
+            <div style="font-family:'Syne',sans-serif;font-size:1.4rem;font-weight:800;color:#FFD700;margin-top:4px;">
+            {metrics['sharpe_ratio']:.2f}</div>
+            </div>""",
+            unsafe_allow_html=True,
+        )
+        mc5.markdown(
+            f"""<div style="background:rgba(0,0,0,.3);border:1px solid rgba(255,255,255,.1);
+            border-radius:12px;padding:16px;text-align:center;">
+            <div style="font-size:.7rem;color:#aaa;text-transform:uppercase;letter-spacing:1px;">📉 Max Drawdown</div>
+            <div style="font-family:'Syne',sans-serif;font-size:1.4rem;font-weight:800;color:#ff6666;margin-top:4px;">
+            -{metrics['max_drawdown']:.2f}%</div>
+            </div>""",
+            unsafe_allow_html=True,
+        )
+        mc6.markdown(
+            f"""<div style="background:rgba(0,0,0,.3);border:1px solid rgba(255,255,255,.1);
+            border-radius:12px;padding:16px;text-align:center;">
+            <div style="font-size:.7rem;color:#aaa;text-transform:uppercase;letter-spacing:1px;">🔄 Trades / Win %</div>
+            <div style="font-family:'Syne',sans-serif;font-size:1.4rem;font-weight:800;color:#FF9A3C;margin-top:4px;">
+            {metrics['total_trades']} / {metrics['win_rate']:.0f}%</div>
+            </div>""",
+            unsafe_allow_html=True,
+        )
+
+        # ── Alpha verdict ─────────────────────────────────────────────
+        st.markdown("<br>", unsafe_allow_html=True)
+        if metrics["alpha"] > 2:
+            verdict_html = (
+                '<div style="background:rgba(0,200,83,.1);border:1px solid rgba(0,200,83,.4);'
+                'border-radius:12px;padding:14px 20px;border-left:5px solid #00c853;">'
+                '<span style="font-family:\'Syne\',sans-serif;font-weight:800;font-size:1.1rem;color:#00ff88;">'
+                f'🏆 RL Agent BEAT Buy & Hold by {metrics["alpha"]:+.2f}%</span>'
+                '<br><span style="font-size:.82rem;color:#aaa;">The trained policy found profitable trading opportunities '
+                'that outperformed passive investing.</span></div>'
+            )
+        elif metrics["alpha"] > -2:
+            verdict_html = (
+                '<div style="background:rgba(255,214,0,.08);border:1px solid rgba(255,214,0,.3);'
+                'border-radius:12px;padding:14px 20px;border-left:5px solid #ffd600;">'
+                '<span style="font-family:\'Syne\',sans-serif;font-weight:800;font-size:1.1rem;color:#ffd600;">'
+                f'🤝 RL Agent performed SIMILAR to Buy & Hold ({metrics["alpha"]:+.2f}% alpha)</span>'
+                '<br><span style="font-size:.82rem;color:#aaa;">The agent matched the benchmark. '
+                'Try more training steps or a different algorithm.</span></div>'
+            )
+        else:
+            verdict_html = (
+                '<div style="background:rgba(255,23,68,.08);border:1px solid rgba(255,23,68,.3);'
+                'border-radius:12px;padding:14px 20px;border-left:5px solid #ff1744;">'
+                '<span style="font-family:\'Syne\',sans-serif;font-weight:800;font-size:1.1rem;color:#ff4444;">'
+                f'📉 RL Agent UNDERPERFORMED Buy & Hold by {abs(metrics["alpha"]):.2f}%</span>'
+                '<br><span style="font-size:.82rem;color:#aaa;">The model needs more training steps, '
+                'a different algorithm, or a longer data period.</span></div>'
+            )
+        st.markdown(verdict_html, unsafe_allow_html=True)
+
+        # ── Equity Curve Chart ────────────────────────────────────────
+        st.markdown("<br>", unsafe_allow_html=True)
+        st.markdown(
+            '<div style="font-family:\'Syne\',sans-serif;font-size:1rem;font-weight:700;'
+            'color:white;margin-bottom:8px;">📈 Equity Curve — RL Agent vs Buy & Hold</div>',
+            unsafe_allow_html=True,
+        )
+
+        equity = results["equity_curve"]
+        bh_curve = results["buy_hold_curve"]
+        dates = results["test_dates"]
+
+        # Ensure all arrays match length
+        min_len = min(len(equity), len(bh_curve), len(dates))
+        equity = equity[:min_len]
+        bh_curve = bh_curve[:min_len]
+        dates = dates[:min_len]
+
+        fig = go.Figure()
+        fig.add_trace(
+            go.Scatter(
+                x=dates,
+                y=equity,
+                name="🤖 RL Agent",
+                line=dict(color="#00ff88", width=2.5),
+                fill="tozeroy",
+                fillcolor="rgba(0,255,136,0.05)",
+            )
+        )
+        fig.add_trace(
+            go.Scatter(
+                x=dates,
+                y=bh_curve,
+                name="📈 Buy & Hold",
+                line=dict(color="#FF9A3C", width=2, dash="dash"),
+            )
+        )
+
+        # Add trade markers
+        buy_trades = [t for t in results["trades"] if t["action"] == "BUY"]
+        sell_trades = [t for t in results["trades"] if "SELL" in t["action"]]
+
+        if buy_trades:
+            buy_steps = [t["step"] for t in buy_trades if t["step"] < min_len]
+            buy_vals = [equity[s] for s in buy_steps]
+            buy_dates = [dates[s] for s in buy_steps]
+            fig.add_trace(
+                go.Scatter(
+                    x=buy_dates,
+                    y=buy_vals,
+                    mode="markers",
+                    name="🟢 Buy",
+                    marker=dict(
+                        color="#00ff88",
+                        size=10,
+                        symbol="triangle-up",
+                        line=dict(color="white", width=1),
+                    ),
+                )
+            )
+
+        if sell_trades:
+            sell_steps = [t["step"] for t in sell_trades if t["step"] < min_len]
+            sell_vals = [equity[s] for s in sell_steps]
+            sell_dates = [dates[s] for s in sell_steps]
+            fig.add_trace(
+                go.Scatter(
+                    x=sell_dates,
+                    y=sell_vals,
+                    mode="markers",
+                    name="🔴 Sell",
+                    marker=dict(
+                        color="#ff4444",
+                        size=10,
+                        symbol="triangle-down",
+                        line=dict(color="white", width=1),
+                    ),
+                )
+            )
+
+        # Add horizontal line at initial balance
+        fig.add_hline(
+            y=results["initial_balance"],
+            line_dash="dot",
+            line_color="rgba(255,255,255,0.2)",
+            annotation_text=f"Initial ₹{results['initial_balance']:,.0f}",
+            annotation_position="bottom right",
+            annotation_font_color="#888",
+        )
+
+        fig.update_layout(
+            template="plotly_dark",
+            paper_bgcolor="#0e1117",
+            plot_bgcolor="#0e1117",
+            font=dict(family="Syne, sans-serif"),
+            height=450,
+            margin=dict(l=60, r=40, t=30, b=40),
+            legend=dict(
+                orientation="h",
+                yanchor="bottom",
+                y=1.02,
+                xanchor="right",
+                x=1,
+                font=dict(size=11),
+            ),
+            yaxis=dict(
+                title="Portfolio Value (₹)",
+                gridcolor="rgba(255,255,255,0.05)",
+                tickformat=",.0f",
+                tickprefix="₹",
+            ),
+            xaxis=dict(gridcolor="rgba(255,255,255,0.05)"),
+            hovermode="x unified",
+        )
+
+        st.plotly_chart(fig, use_container_width=True)
+
+        # ── Trade Log ─────────────────────────────────────────────────
+        st.markdown(
+            '<div style="font-family:\'Syne\',sans-serif;font-size:1rem;font-weight:700;'
+            'color:white;margin:16px 0 8px;">📋 Trade Log</div>',
+            unsafe_allow_html=True,
+        )
+
+        if results["trades"]:
+            trades_df = pd.DataFrame(results["trades"])
+            # Style the dataframe
+            display_cols = [c for c in ["date", "action", "price", "shares", "value", "pnl_pct"] if c in trades_df.columns]
+            trades_display = trades_df[display_cols].copy()
+            trades_display.columns = [
+                {"date": "Date", "action": "Action", "price": "Price (₹)",
+                 "shares": "Shares", "value": "Portfolio (₹)", "pnl_pct": "P&L %"}.get(c, c)
+                for c in display_cols
+            ]
+            st.dataframe(
+                trades_display,
+                use_container_width=True,
+                hide_index=True,
+                height=min(400, 40 + len(trades_display) * 35),
+            )
+        else:
+            st.info("No trades were executed by the agent.")
+
+    elif not run_rl:
+        # No results yet — show instructions
+        st.markdown(
+            """
+<div style="text-align:center;padding:60px 20px;color:#888;">
+  <div style="font-size:3rem;margin-bottom:16px;">🤖</div>
+  <div style="font-family:'Syne',sans-serif;font-size:1.3rem;font-weight:700;color:#ccc;margin-bottom:8px;">
+    Ready to train
+  </div>
+  <div style="font-size:.9rem;max-width:550px;margin:0 auto;line-height:1.6;">
+    Select a stock and configure the RL agent above, then click
+    <b>🚀 Run Simulation</b>.<br><br>
+    The AI will train a neural-network trading policy on 80% of historical data,
+    then backtest on the remaining 20% — completely out of sample.<br><br>
+    <span style="color:#FF9A3C;">💡 Tip:</span> Start with <b>PPO</b>, <b>10,000 steps</b>,
+    and <b>2 Years</b> of data for best results.
   </div>
 </div>""",
             unsafe_allow_html=True,
