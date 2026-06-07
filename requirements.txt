@@ -1,7 +1,7 @@
 groq
 duckduckgo-search
 newsapi-python
-yfinance
+yfinance>=0.2.36
 textblob
 pandas
 streamlit

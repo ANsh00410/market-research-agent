@@ -358,7 +358,7 @@ def fetch_cnbc_ticker_data():
         "M&M.NS", "NTPC.NS", "POWERGRID.NS", "INDUSINDBK.NS", "NESTLEIND.NS"
     ]
     try:
-        df = yf.download(tickers, period="5d", progress=False)
+        df = yf.download(tickers, period="5d", progress=False, multi_level_index=False)
         if df.empty:
             return []
             
@@ -537,7 +537,8 @@ def fetch_portfolio_snapshots_cached(portfolio_entries_json):
             period="5y",
             group_by="ticker",
             progress=False,
-            threads=True
+            threads=True,
+            multi_level_index=False
         )
     except Exception as e:
         err_msg = str(e)
@@ -2497,7 +2498,8 @@ with tab4:
                 start="2026-01-01",
                 group_by="ticker",
                 progress=False,
-                threads=True
+                threads=True,
+                multi_level_index=False
             )
         except Exception as e:
             st.error(f"Failed to fetch market data: {e}")
@@ -2594,6 +2596,7 @@ with tab4:
                 progress=False,
                 auto_adjust=True,
                 group_by="ticker",
+                multi_level_index=False,
             )
             # Parse the multi-ticker DataFrame
             # Structure: columns are MultiIndex (field, ticker) or (ticker, field)
